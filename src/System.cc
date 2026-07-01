@@ -1341,6 +1341,43 @@ cv::Mat System::GetFrameDrawerImage(float imageScale)
     return mpFrameDrawer->DrawFrame(imageScale);
 }
 
+std::vector<cv::Point3f> System::GetAllMapPointPositions()
+{
+    std::vector<cv::Point3f> out;
+    Map* pMap = mpAtlas->GetCurrentMap();
+    if (!pMap) return out;
+    const std::vector<MapPoint*> vpMPs = pMap->GetAllMapPoints();
+    out.reserve(vpMPs.size());
+    for (MapPoint* pMP : vpMPs)
+    {
+        if (!pMP || pMP->isBad()) continue;
+        const Eigen::Vector3f p = pMP->GetWorldPos();
+        out.emplace_back(p.x(), p.y(), p.z());
+    }
+    return out;
+}
+
+std::vector<cv::Point3f> System::GetAllKeyFramePositions()
+{
+    std::vector<cv::Point3f> out;
+    Map* pMap = mpAtlas->GetCurrentMap();
+    if (!pMap) return out;
+    const std::vector<KeyFrame*> vpKFs = pMap->GetAllKeyFrames();
+    out.reserve(vpKFs.size());
+    for (KeyFrame* pKF : vpKFs)
+    {
+        if (!pKF || pKF->isBad()) continue;
+        const Eigen::Vector3f p = pKF->GetCameraCenter();
+        out.emplace_back(p.x(), p.y(), p.z());
+    }
+    return out;
+}
+
+int System::GetNumMaps()
+{
+    return mpAtlas->CountMaps();
+}
+
 double System::GetTimeFromIMUInit()
 {
     double aux = mpLocalMapper->GetCurrKFTime()-mpLocalMapper->mFirstTs;

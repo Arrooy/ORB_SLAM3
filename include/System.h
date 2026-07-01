@@ -185,6 +185,14 @@ public:
     // state with an internal mutex.
     cv::Mat GetFrameDrawerImage(float imageScale = 1.f);
 
+    // PATCHED (Arrooy fork): full sparse-map snapshot for external map
+    // visualization. GetTrackedMapPoints() (existing API) only returns the
+    // current frame's tracked subset, not the whole map. Filters out points/
+    // keyframes marked bad (culled). World frame, metres.
+    std::vector<cv::Point3f> GetAllMapPointPositions();
+    std::vector<cv::Point3f> GetAllKeyFramePositions();
+    int GetNumMaps();
+
     // For debugging
     double GetTimeFromIMUInit();
     bool isLost();
