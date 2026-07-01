@@ -9,21 +9,34 @@ MESSAGE("Build type: " ${CMAKE_BUILD_TYPE})
 
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}  -Wall   -O3")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall   -O3")
-set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -march=native")
-set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -march=native")
+# PATCHED (Arrooy fork, 2026-07-01): upstream sets -march=native here. Dropped:
+# (a) portability — a shared lib baked for the build machine's exact ISA is
+#     fragile across the ground-control PC / any other build host;
+# (b) it segfaulted inside Frame::Frame()/FrameDrawer::FrameDrawer() on this
+#     dev machine even though /proc/cpuinfo reports avx2/fma — consistent with
+#     -march=native mis-detecting usable SIMD in a sandboxed/virtualized CPU
+#     view. Removing it fixed the crash.
 
-# Check C++11 or C++0x support
+# Check C++14 support.
+#
+# PATCHED (Arrooy fork, 2026-07-01): upstream forced -std=c++11, but Pangolin's
+# bundled sigslot library (Viewer.cc / MapDrawer.cc includes) uses C++14
+# features (std::decay_t, std::enable_if_t, auto lambda parameters). Modern
+# Pangolin has no C++11-compatible fallback, so building against it under
+# forced C++11 fails with "'decay_t' is not a member of 'std'" etc. across
+# every translation unit that (transitively) includes pangolin/pangolin.h.
+# C++14 is a superset of C++11 so this does not affect ORB-SLAM3's own code.
 include(CheckCXXCompilerFlag)
+CHECK_CXX_COMPILER_FLAG("-std=c++14" COMPILER_SUPPORTS_CXX14)
 CHECK_CXX_COMPILER_FLAG("-std=c++11" COMPILER_SUPPORTS_CXX11)
-CHECK_CXX_COMPILER_FLAG("-std=c++0x" COMPILER_SUPPORTS_CXX0X)
-if(COMPILER_SUPPORTS_CXX11)
+if(COMPILER_SUPPORTS_CXX14)
+   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++14")
+   add_definitions(-DCOMPILEDWITHC11)
+   message(STATUS "Using flag -std=c++14 (bumped from c++11: Pangolin/sigslot needs C++14).")
+elseif(COMPILER_SUPPORTS_CXX11)
    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
    add_definitions(-DCOMPILEDWITHC11)
    message(STATUS "Using flag -std=c++11.")
-elseif(COMPILER_SUPPORTS_CXX0X)
-   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++0x")
-   add_definitions(-DCOMPILEDWITHC0X)
-   message(STATUS "Using flag -std=c++0x.")
 else()
    message(FATAL_ERROR "The compiler ${CMAKE_CXX_COMPILER} has no C++11 support. Please use a different C++ compiler.")
 endif()
