@@ -177,6 +177,14 @@ public:
     std::vector<MapPoint*> GetTrackedMapPoints();
     std::vector<cv::KeyPoint> GetTrackedKeyPointsUn();
 
+    // PATCHED (Arrooy fork): FrameDrawer's rendered overlay (tracked/matched
+    // features colour-coded by state, KF/MP/match counts) is normally only
+    // consumed by the internal Viewer thread. Exposed here so headless
+    // callers (bUseViewer=false) can still get the same debug visualization.
+    // Safe to call right after TrackMonocular — FrameDrawer guards its own
+    // state with an internal mutex.
+    cv::Mat GetFrameDrawerImage(float imageScale = 1.f);
+
     // For debugging
     double GetTimeFromIMUInit();
     bool isLost();
