@@ -1378,6 +1378,12 @@ int System::GetNumMaps()
     return mpAtlas->CountMaps();
 }
 
+void System::SaveMapToFile(const std::string& baseName)
+{
+    mStrSaveAtlasToFile = baseName;
+    SaveAtlas(FileType::BINARY_FILE);
+}
+
 double System::GetTimeFromIMUInit()
 {
     double aux = mpLocalMapper->GetCurrKFTime()-mpLocalMapper->mFirstTs;

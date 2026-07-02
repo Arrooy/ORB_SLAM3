@@ -193,6 +193,16 @@ public:
     std::vector<cv::Point3f> GetAllKeyFramePositions();
     int GetNumMaps();
 
+    // PATCHED (Arrooy fork): explicit, on-demand binary Atlas save. Upstream
+    // only saves the Atlas implicitly inside Shutdown() when the settings file
+    // sets System.SaveAtlasToFile — which (a) forces the save to run before
+    // trajectory export and (b) if Atlas::PreSave() crashes (a known upstream
+    // fragility after mono-inertial map resets: dangling KeyFrame observation
+    // pointers) takes the whole process down. Exposing it lets the caller run
+    // the save LAST and, if desired, inside an isolated child process. Writes
+    // <baseName>.osa (extension appended by SaveAtlas). Call after Shutdown().
+    void SaveMapToFile(const std::string& baseName);
+
     // For debugging
     double GetTimeFromIMUInit();
     bool isLost();
