@@ -523,12 +523,16 @@ void System::Shutdown()
 
     mpLocalMapper->RequestFinish();
     mpLoopCloser->RequestFinish();
-    /*if(mpViewer)
+    // PATCHED (Arrooy fork): upstream commented this out, which leaves the
+    // Pangolin Viewer thread running (still touching the GL context) while the
+    // System is torn down at process exit -> segfault. Re-enabled so the viewer
+    // thread is cleanly stopped and joined before destruction.
+    if(mpViewer)
     {
         mpViewer->RequestFinish();
         while(!mpViewer->isFinished())
             usleep(5000);
-    }*/
+    }
 
     // Wait until all thread have effectively stopped
     /*while(!mpLocalMapper->isFinished() || !mpLoopCloser->isFinished() || mpLoopCloser->isRunningGBA())
