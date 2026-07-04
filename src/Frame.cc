@@ -429,6 +429,14 @@ bool Frame::isSet() const {
 }
 
 void Frame::SetPose(const Sophus::SE3<float> &Tcw) {
+    // PATCHED (Arrooy fork): same mpMutexImu guard as SetImuPoseVelocity()
+    // below -- this writes the identical fields (mTcw, and via
+    // UpdatePoseMatrices(): mRwc/mOw/mRcw/mtcw) from the Tracking thread,
+    // while SetImuPoseVelocity() writes them cross-thread (LocalMapping/
+    // LoopClosing via Tracking::UpdateFrameIMU()). Without this lock the two
+    // writers race and can torn-write a non-orthogonal/inf rotation -- the
+    // exact "corridor" crash signature this closes.
+    unique_lock<std::mutex> lock(*mpMutexImu);
     mTcw = Tcw;
 
     UpdatePoseMatrices();
@@ -438,6 +446,10 @@ void Frame::SetPose(const Sophus::SE3<float> &Tcw) {
 
 void Frame::SetNewBias(const IMU::Bias &b)
 {
+    // PATCHED (Arrooy fork): mImuBias/mpImuPreintegrated are written from
+    // Tracking::UpdateFrameIMU() cross-thread too (same callers as
+    // SetImuPoseVelocity() above) -- guard for the same reason.
+    unique_lock<std::mutex> lock(*mpMutexImu);
     mImuBias = b;
     if(mpImuPreintegrated)
         mpImuPreintegrated->SetNewBias(b);
