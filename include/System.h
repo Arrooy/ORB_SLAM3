@@ -193,6 +193,13 @@ public:
     std::vector<cv::Point3f> GetAllKeyFramePositions();
     int GetNumMaps();
 
+    // PATCHED (Arrooy fork): absolute IMU-frame pose + velocity of the
+    // current tracked frame, once mono-inertial init has converged. Mirrors
+    // OpenVINS/OKVIS2's absolute-state output for external logging (see
+    // indoor-vio's OrbSlam3Slam::get_state() / vo::OdometryState). Returns
+    // false (leaves outputs untouched) until mpAtlas->isImuInitialized().
+    bool GetImuState(Sophus::SE3f &Twb, Eigen::Vector3f &velocityWb);
+
     // PATCHED (Arrooy fork): explicit, on-demand binary Atlas save. Upstream
     // only saves the Atlas implicitly inside Shutdown() when the settings file
     // sets System.SaveAtlasToFile — which (a) forces the save to run before
@@ -280,6 +287,17 @@ private:
     std::vector<MapPoint*> mTrackedMapPoints;
     std::vector<cv::KeyPoint> mTrackedKeyPointsUn;
     std::mutex mMutexState;
+
+    // PATCHED (Arrooy fork): cached absolute IMU-frame state, snapshot under
+    // mMutexState at the end of TrackMonocular (the coherent instant the
+    // tracker just produced it, before LocalMapping/LoopClosing overwrite
+    // mCurrentFrame cross-thread). Exposed by GetImuState() under the same lock
+    // — the current-state-getter convention GetTrackingState/GetTrackedMapPoints
+    // follow — so external per-frame polling never touches the live frame or
+    // Frame::mpMutexImu on the hot path.
+    Sophus::SE3f mImuTwb;
+    Eigen::Vector3f mImuVwb = Eigen::Vector3f::Zero();
+    bool mHasImuState = false;
 
     //
     string mStrLoadAtlasFromFile;

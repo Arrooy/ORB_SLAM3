@@ -451,11 +451,17 @@ void Frame::SetVelocity(Eigen::Vector3f Vwb)
 
 Eigen::Vector3f Frame::GetVelocity() const
 {
+    unique_lock<std::mutex> lock(*mpMutexImu);
     return mVw;
 }
 
 void Frame::SetImuPoseVelocity(const Eigen::Matrix3f &Rwb, const Eigen::Vector3f &twb, const Eigen::Vector3f &Vwb)
 {
+    // See the GetImuPosition()/GetImuRotation() comment above: this is the
+    // cross-thread writer half of that race (called from LocalMapping's
+    // InitializeIMU/VIBA and LoopClosing's scale refinement, both on their
+    // own threads, via Tracking::UpdateFrameIMU()).
+    unique_lock<std::mutex> lock(*mpMutexImu);
     mVw = Vwb;
     mbHasVelocity = true;
 
@@ -478,11 +484,26 @@ void Frame::UpdatePoseMatrices()
     mtcw = mTcw.translation();
 }
 
+// PATCHED (Arrooy fork): SetImuPoseVelocity() below is called from the
+// LocalMapping/LoopClosing threads (LocalMapping.cc's InitializeIMU/VIBA and
+// LoopClosing.cc's scale-refinement both call Tracking::UpdateFrameIMU() ->
+// mCurrentFrame.SetImuPoseVelocity() cross-thread) while an external reader
+// (indoor-vio's OrbSlam3Slam::get_state(), called on the Tracking/processing
+// thread right after TrackMonocular() returns) reads these same fields via
+// GetImuPosition/GetImuRotation/GetVelocity with zero prior synchronization —
+// a genuine pre-existing race, previously silent (Tracking's own internal
+// reads never round-tripped through a strict validity check) until the
+// external reader's Sophus::SE3f(Rwb, twb) constructor started hard-aborting
+// on a torn read (observed: inf/-nan rotation right as LocalMapping set the
+// "bad imu" reset flag). mpMutexImu already exists per-Frame (used elsewhere
+// for mbImuPreintegrated) and is reused here as the general IMU-pose guard.
 Eigen::Matrix<float,3,1> Frame::GetImuPosition() const {
+    unique_lock<std::mutex> lock(*mpMutexImu);
     return mRwc * mImuCalib.mTcb.translation() + mOw;
 }
 
 Eigen::Matrix<float,3,3> Frame::GetImuRotation() {
+    unique_lock<std::mutex> lock(*mpMutexImu);
     return mRwc * mImuCalib.mTcb.rotationMatrix();
 }
 

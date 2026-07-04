@@ -470,6 +470,25 @@ Sophus::SE3f System::TrackMonocular(const cv::Mat &im, const double &timestamp, 
     mTrackedMapPoints = mpTracker->mCurrentFrame.mvpMapPoints;
     mTrackedKeyPointsUn = mpTracker->mCurrentFrame.mvKeysUn;
 
+    // PATCHED (Arrooy fork): snapshot the absolute IMU-frame pose+velocity for
+    // GetImuState() while we hold mMutexState and the tracker's estimate is
+    // still coherent (mCurrentFrame is about to become racy: LocalMapping/
+    // LoopClosing's UpdateFrameIMU rewrites it from their own threads). The
+    // finite/orthogonal guard rejects the transient garbage ORB-SLAM3 leaves
+    // during a "bad imu" reset (diagonal ~79000, or inf/nan).
+    mHasImuState = false;
+    if (mpAtlas->isImuInitialized() && mpTracker->mState == Tracking::OK)
+    {
+        const Eigen::Vector3f twb = mpTracker->mCurrentFrame.GetImuPosition();
+        const Eigen::Matrix3f Rwb = mpTracker->mCurrentFrame.GetImuRotation();
+        if (twb.allFinite() && Rwb.allFinite() && std::abs(Rwb.determinant() - 1.0f) < 0.05f)
+        {
+            mImuTwb = Sophus::SE3f(Rwb, twb);
+            mImuVwb = mpTracker->mCurrentFrame.GetVelocity();
+            mHasImuState = true;
+        }
+    }
+
     return Tcw;
 }
 
@@ -1380,6 +1399,23 @@ std::vector<cv::Point3f> System::GetAllKeyFramePositions()
 int System::GetNumMaps()
 {
     return mpAtlas->CountMaps();
+}
+
+bool System::GetImuState(Sophus::SE3f &Twb, Eigen::Vector3f &velocityWb)
+{
+    // Cheap cached read of the snapshot taken in TrackMonocular under
+    // mMutexState (mirrors GetTrackingState/GetTrackedMapPoints). Does NOT
+    // reach into the live mCurrentFrame nor take Frame::mpMutexImu, so
+    // per-frame polling by an external logger can't race LocalMapping's writes
+    // or contend on the hot IMU-preintegration lock.
+    unique_lock<mutex> lock(mMutexState);
+    if (!mHasImuState)
+    {
+        return false;
+    }
+    Twb = mImuTwb;
+    velocityWb = mImuVwb;
+    return true;
 }
 
 void System::SaveMapToFile(const std::string& baseName)
