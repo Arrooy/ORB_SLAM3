@@ -32,7 +32,8 @@ namespace ORB_SLAM3
 
 LocalMapping::LocalMapping(System* pSys, Atlas *pAtlas, const float bMonocular, bool bInertial, const string &_strSeqName):
     mpSystem(pSys), mbMonocular(bMonocular), mbInertial(bInertial), mbResetRequested(false), mbResetRequestedActiveMap(false), mbFinishRequested(false), mbFinished(true), mpAtlas(pAtlas), bInitializing(false),
-    mbAbortBA(false), mbStopped(false), mbStopRequested(false), mbNotStop(false), mbAcceptKeyFrames(true),
+    mbAbortBA(false), mbStopped(false), mbStopRequested(false), mbNotStop(false),
+    mbSynchronous(false), mbSyncGo(false), mbSyncDone(true), mbAcceptKeyFrames(true),
     mIdxInit(0), mScale(1.0), mInitSect(0), mbNotBA1(true), mbNotBA2(true), mIdxIteration(0), infoInertial(Eigen::MatrixXd::Zero(9,9))
 {
     mnMatchesInliers = 0;
@@ -67,6 +68,9 @@ void LocalMapping::Run()
 
     while(1)
     {
+        if(mbSynchronous)
+            WaitForSyncGo();
+
         // Tracking will see that Local Mapping is busy
         SetAcceptKeyFrames(false);
 
@@ -264,7 +268,11 @@ void LocalMapping::Run()
                 usleep(3000);
             }
             if(CheckFinish())
+            {
+                if(mbSynchronous)
+                    SignalSyncDone();
                 break;
+            }
         }
 
         ResetIfRequested();
@@ -273,12 +281,57 @@ void LocalMapping::Run()
         SetAcceptKeyFrames(true);
 
         if(CheckFinish())
+        {
+            if(mbSynchronous)
+                SignalSyncDone();
             break;
+        }
 
-        usleep(3000);
+        if(mbSynchronous)
+            SignalSyncDone();
+        else
+            usleep(3000);
     }
 
     SetFinish();
+}
+
+void LocalMapping::SetSynchronous()
+{
+    // Call before System spawns mptLocalMapping. See StepOnce().
+    mbSynchronous = true;
+}
+
+void LocalMapping::WaitForSyncGo()
+{
+    unique_lock<mutex> lock(mMutexSync);
+    mCVSync.wait(lock, [this]{ return mbSyncGo; });
+    mbSyncGo = false;
+}
+
+void LocalMapping::SignalSyncDone()
+{
+    unique_lock<mutex> lock(mMutexSync);
+    mbSyncDone = true;
+    mCVSync.notify_all();
+}
+
+void LocalMapping::StepOnce()
+{
+    // Driver-side half of the handshake: release Run() for exactly one
+    // iteration of its while(1) loop, then block until that iteration
+    // reports done. Run()'s own code is untouched -- this only replaces
+    // "wake up on your own schedule" with "wake up when told to", which is
+    // what makes offline replay deterministic instead of OS-scheduling
+    // dependent.
+    {
+        unique_lock<mutex> lock(mMutexSync);
+        mbSyncDone = false;
+        mbSyncGo = true;
+    }
+    mCVSync.notify_all();
+    unique_lock<mutex> lock(mMutexSync);
+    mCVSync.wait(lock, [this]{ return mbSyncDone; });
 }
 
 void LocalMapping::InsertKeyFrame(KeyFrame *pKF)
@@ -828,6 +881,20 @@ void LocalMapping::RequestStop()
     mbStopRequested = true;
     unique_lock<mutex> lock2(mMutexNewKFs);
     mbAbortBA = true;
+
+    // Synchronous mode: Run() only flips mbStopped from inside its own
+    // while(1) iteration (see Stop(), called at the "else if(Stop() &&
+    // !mbBadImu)" branch above), which in sync mode only executes when the
+    // driver calls StepOnce() -- never concurrently with whoever is calling
+    // RequestStop() (LoopClosing's gated iteration, or GBA's own thread).
+    // The 5 RequestStop()+isStopped() spin-waits in LoopClosing.cc (plus one
+    // more in System::TrackMonocular's ActivateLocalizationMode path) assume
+    // an independently-scheduled LocalMapping thread will notice on its own;
+    // in sync mode nothing will, so short-circuit it here -- honoring the
+    // same mbNotStop veto Stop() itself uses -- or every one of those waits
+    // hangs forever.
+    if(mbSynchronous && !mbNotStop)
+        mbStopped = true;
 }
 
 bool LocalMapping::Stop()

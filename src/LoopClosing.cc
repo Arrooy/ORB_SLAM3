@@ -33,7 +33,8 @@ namespace ORB_SLAM3
 {
 
 LoopClosing::LoopClosing(Atlas *pAtlas, KeyFrameDatabase *pDB, ORBVocabulary *pVoc, const bool bFixScale, const bool bActiveLC):
-    mbResetRequested(false), mbResetActiveMapRequested(false), mbFinishRequested(false), mbFinished(true), mpAtlas(pAtlas),
+    mbResetRequested(false), mbResetActiveMapRequested(false), mbFinishRequested(false), mbFinished(true),
+    mbSynchronous(false), mbSyncGo(false), mbSyncDone(true), mpAtlas(pAtlas),
     mpKeyFrameDB(pDB), mpORBVocabulary(pVoc), mpMatchedKF(NULL), mLastLoopKFid(0), mbRunningGBA(false), mbFinishedGBA(true),
     mbStopGBA(false), mpThreadGBA(NULL), mbFixScale(bFixScale), mnFullBAIdx(0), mnLoopNumCoincidences(0), mnMergeNumCoincidences(0),
     mbLoopDetected(false), mbMergeDetected(false), mnLoopNumNotFound(0), mnMergeNumNotFound(0), mbActiveLC(bActiveLC)
@@ -93,6 +94,8 @@ void LoopClosing::Run()
 
     while(1)
     {
+        if(mbSynchronous)
+            WaitForSyncGo();
 
         //NEW LOOP AND MERGE DETECTION ALGORITHM
         //----------------------------
@@ -150,6 +153,8 @@ void LoopClosing::Run()
                                 mnMergeNumNotFound = 0;
                                 mbMergeDetected = false;
                                 Verbose::PrintMess("scale bad estimated. Abort merging", Verbose::VERBOSITY_NORMAL);
+                                if(mbSynchronous)
+                                    SignalSyncDone();
                                 continue;
                             }
                             // If inertial, force only yaw
@@ -299,13 +304,51 @@ void LoopClosing::Run()
         ResetIfRequested();
 
         if(CheckFinish()){
+            if(mbSynchronous)
+                SignalSyncDone();
             break;
         }
 
-        usleep(5000);
+        if(mbSynchronous)
+            SignalSyncDone();
+        else
+            usleep(5000);
     }
 
     SetFinish();
+}
+
+void LoopClosing::SetSynchronous()
+{
+    // Call before System spawns mptLoopClosing. See StepOnce().
+    mbSynchronous = true;
+}
+
+void LoopClosing::WaitForSyncGo()
+{
+    unique_lock<mutex> lock(mMutexSync);
+    mCVSync.wait(lock, [this]{ return mbSyncGo; });
+    mbSyncGo = false;
+}
+
+void LoopClosing::SignalSyncDone()
+{
+    unique_lock<mutex> lock(mMutexSync);
+    mbSyncDone = true;
+    mCVSync.notify_all();
+}
+
+void LoopClosing::StepOnce()
+{
+    // Same driver-side handshake as LocalMapping::StepOnce().
+    {
+        unique_lock<mutex> lock(mMutexSync);
+        mbSyncDone = false;
+        mbSyncGo = true;
+    }
+    mCVSync.notify_all();
+    unique_lock<mutex> lock(mMutexSync);
+    mCVSync.wait(lock, [this]{ return mbSyncDone; });
 }
 
 void LoopClosing::InsertKeyFrame(KeyFrame *pKF)
@@ -988,6 +1031,11 @@ void LoopClosing::CorrectLoop()
         {
             mpThreadGBA->detach();
             delete mpThreadGBA;
+            // PATCHED (Arrooy fork): null after delete -- ResetIfRequested()
+            // now also dereferences mpThreadGBA (see its join() there), so
+            // this can no longer be left dangling between here and the next
+            // "new thread(...)" reassignment a few dozen lines below.
+            mpThreadGBA = nullptr;
         }
         cout << "  Done!!" << endl;
     }
@@ -1239,6 +1287,11 @@ void LoopClosing::MergeLocal()
         {
             mpThreadGBA->detach();
             delete mpThreadGBA;
+            // PATCHED (Arrooy fork): null after delete -- ResetIfRequested()
+            // now also dereferences mpThreadGBA (see its join() there), so
+            // this can no longer be left dangling between here and the next
+            // "new thread(...)" reassignment a few dozen lines below.
+            mpThreadGBA = nullptr;
         }
         bRelaunchBA = true;
     }
@@ -1812,6 +1865,11 @@ void LoopClosing::MergeLocal2()
         {
             mpThreadGBA->detach();
             delete mpThreadGBA;
+            // PATCHED (Arrooy fork): null after delete -- ResetIfRequested()
+            // now also dereferences mpThreadGBA (see its join() there), so
+            // this can no longer be left dangling between here and the next
+            // "new thread(...)" reassignment a few dozen lines below.
+            mpThreadGBA = nullptr;
         }
         bRelaunchBA = true;
     }
@@ -2237,6 +2295,39 @@ void LoopClosing::RequestResetActiveMap(Map *pMap)
 void LoopClosing::ResetIfRequested()
 {
     unique_lock<mutex> lock(mMutexReset);
+
+    if(mbResetRequested || mbResetActiveMapRequested)
+    {
+        // PATCHED (Arrooy fork): stop + join any in-flight GBA before
+        // resetting, instead of leaving it running unbounded in the
+        // background. Upstream only ever detaches GBA (CorrectLoop/
+        // MergeLocal/MergeLocal2's own abort blocks) when it's about to
+        // launch a REPLACEMENT GBA right after -- fine to let the old one
+        // finish unobserved. A reset has no replacement coming. The old GBA
+        // thread holds a raw Map* into a map that's about to be abandoned --
+        // never freed (Atlas::clearAtlas()/Map::clear() have the actual
+        // delete commented out), so this was never a use-after-free, just an
+        // unbounded stray write plus one leaked live OS thread per reset.
+        // Reset-thrash datasets (corridor, MH_01 bad-init runs) can hit this
+        // dozens of times a run. mbStopGBA makes the optimizer's inner loop
+        // exit promptly, so the join() below is bounded, not a stall; the
+        // mnFullBAIdx bump mirrors the existing abort sites' generation-
+        // counter guard so a GBA that's already mid-way through applying its
+        // (now stale) correction discards it instead of writing into the
+        // post-reset map.
+        {
+            unique_lock<mutex> lockGBA(mMutexGBA);
+            mbStopGBA = true;
+            mnFullBAIdx++;
+        }
+        if(mpThreadGBA)
+        {
+            mpThreadGBA->join();
+            delete mpThreadGBA;
+            mpThreadGBA = nullptr;
+        }
+    }
+
     if(mbResetRequested)
     {
         cout << "Loop closer reset requested..." << endl;

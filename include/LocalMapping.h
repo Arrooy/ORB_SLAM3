@@ -27,6 +27,7 @@
 #include "KeyFrameDatabase.h"
 #include "Settings.h"
 
+#include <condition_variable>
 #include <mutex>
 
 
@@ -70,6 +71,14 @@ public:
 
     void RequestFinish();
     bool isFinished();
+
+    // Synchronous (offline-replay) mode: Run() still executes on its own
+    // std::thread -- its while(1) body is untouched -- but each iteration is
+    // gated by a driver-controlled handshake instead of free OS scheduling,
+    // so replaying the same input always produces the same LocalMapping/
+    // LoopClosing call interleaving. See System::SetSynchronous().
+    void SetSynchronous();
+    void StepOnce();
 
     int KeyframesInQueue(){
         unique_lock<std::mutex> lock(mMutexNewKFs);
@@ -175,6 +184,15 @@ protected:
     bool mbStopRequested;
     bool mbNotStop;
     std::mutex mMutexStop;
+
+    // Synchronous mode (see SetSynchronous()/StepOnce() above).
+    void WaitForSyncGo();
+    void SignalSyncDone();
+    bool mbSynchronous;
+    bool mbSyncGo;
+    bool mbSyncDone;
+    std::mutex mMutexSync;
+    std::condition_variable mCVSync;
 
     bool mbAcceptKeyFrames;
     std::mutex mMutexAccept;

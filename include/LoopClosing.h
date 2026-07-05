@@ -29,6 +29,7 @@
 #include "KeyFrameDatabase.h"
 
 #include <boost/algorithm/string.hpp>
+#include <condition_variable>
 #include <thread>
 #include <mutex>
 #include "Thirdparty/g2o/g2o/types/types_seven_dof_expmap.h"
@@ -81,6 +82,11 @@ public:
     void RequestFinish();
 
     bool isFinished();
+
+    // Synchronous (offline-replay) mode -- same handshake as
+    // LocalMapping::SetSynchronous()/StepOnce(), same reasoning there.
+    void SetSynchronous();
+    void StepOnce();
 
     Viewer* mpViewer;
 
@@ -155,6 +161,15 @@ protected:
     bool mbFinishRequested;
     bool mbFinished;
     std::mutex mMutexFinish;
+
+    // Synchronous mode (see SetSynchronous()/StepOnce() above).
+    void WaitForSyncGo();
+    void SignalSyncDone();
+    bool mbSynchronous;
+    bool mbSyncGo;
+    bool mbSyncDone;
+    std::mutex mMutexSync;
+    std::condition_variable mCVSync;
 
     Atlas* mpAtlas;
     Tracking* mpTracker;

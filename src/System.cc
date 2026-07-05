@@ -39,8 +39,8 @@ namespace ORB_SLAM3
 Verbose::eLevel Verbose::th = Verbose::VERBOSITY_NORMAL;
 
 System::System(const string &strVocFile, const string &strSettingsFile, const eSensor sensor,
-               const bool bUseViewer, const int initFr, const string &strSequence):
-    mSensor(sensor), mpViewer(static_cast<Viewer*>(NULL)), mbReset(false), mbResetActiveMap(false),
+               const bool bUseViewer, const int initFr, const string &strSequence, const bool bSynchronous):
+    mSensor(sensor), mbSynchronous(bSynchronous), mpViewer(static_cast<Viewer*>(NULL)), mbReset(false), mbResetActiveMap(false),
     mbActivateLocalizationMode(false), mbDeactivateLocalizationMode(false), mbShutDown(false)
 {
     // Output welcome message
@@ -194,6 +194,8 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
     //Initialize the Local Mapping thread and launch
     mpLocalMapper = new LocalMapping(this, mpAtlas, mSensor==MONOCULAR || mSensor==IMU_MONOCULAR,
                                      mSensor==IMU_MONOCULAR || mSensor==IMU_STEREO || mSensor==IMU_RGBD, strSequence);
+    if(mbSynchronous)
+        mpLocalMapper->SetSynchronous();
     mptLocalMapping = new thread(&ORB_SLAM3::LocalMapping::Run,mpLocalMapper);
     mpLocalMapper->mInitFr = initFr;
     if(settings_)
@@ -211,6 +213,8 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
     //Initialize the Loop Closing thread and launch
     // mSensor!=MONOCULAR && mSensor!=IMU_MONOCULAR
     mpLoopCloser = new LoopClosing(mpAtlas, mpKeyFrameDatabase, mpVocabulary, mSensor!=MONOCULAR, activeLC); // mSensor!=MONOCULAR);
+    if(mbSynchronous)
+        mpLoopCloser->SetSynchronous();
     mptLoopClosing = new thread(&ORB_SLAM3::LoopClosing::Run, mpLoopCloser);
 
     //Set pointers between threads
@@ -489,7 +493,24 @@ Sophus::SE3f System::TrackMonocular(const cv::Mat &im, const double &timestamp, 
         }
     }
 
+    // PATCHED (Arrooy fork): deterministic-replay drain. Outside mMutexState's
+    // scope is not required here (LocalMapping/LoopClosing never touch that
+    // mutex), but this call is placed after Tracking's own Track() has fully
+    // returned -- never call DrainMapping() from inside Track() itself, or the
+    // synchronous LocalMapping iteration it triggers would try to re-lock
+    // Map::mMutexMapUpdate while Track() might still hold it (see the ctor arg
+    // comment in System.h).
+    DrainMapping();
+
     return Tcw;
+}
+
+void System::DrainMapping()
+{
+    if(!mbSynchronous)
+        return;
+    mpLocalMapper->StepOnce();
+    mpLoopCloser->StepOnce();
 }
 
 

@@ -102,7 +102,14 @@ public:
 public:
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
     // Initialize the SLAM system. It launches the Local Mapping, Loop Closing and Viewer threads.
-    System(const string &strVocFile, const string &strSettingsFile, const eSensor sensor, const bool bUseViewer = true, const int initFr = 0, const string &strSequence = std::string());
+    // bSynchronous (PATCHED, Arrooy fork): opt-in deterministic offline-replay
+    // mode. LocalMapping/LoopClosing still run on their own std::thread (their
+    // Run() bodies are untouched), but each iteration is gated by a driver
+    // handshake (see LocalMapping/LoopClosing::StepOnce(), and DrainMapping()
+    // below) instead of free OS scheduling -- replaying the same input then
+    // always produces the same call interleaving. Off by default: live flight
+    // must keep real background threads for real-time performance.
+    System(const string &strVocFile, const string &strSettingsFile, const eSensor sensor, const bool bUseViewer = true, const int initFr = 0, const string &strSequence = std::string(), const bool bSynchronous = false);
 
     // Proccess the given stereo frame. Images must be synchronized and rectified.
     // Input images: RGB (CV_8UC3) or grayscale (CV_8U). RGB is converted to grayscale.
@@ -200,6 +207,12 @@ public:
     // false (leaves outputs untouched) until mpAtlas->isImuInitialized().
     bool GetImuState(Sophus::SE3f &Twb, Eigen::Vector3f &velocityWb);
 
+    // PATCHED (Arrooy fork): drives one deterministic LocalMapping + LoopClosing
+    // iteration each (see the bSynchronous constructor arg above). No-op if the
+    // System wasn't constructed with bSynchronous=true. Call after TrackMonocular
+    // returns, never from inside Track() (Map::mMutexMapUpdate reentrancy).
+    void DrainMapping();
+
     // PATCHED (Arrooy fork): explicit, on-demand binary Atlas save. Upstream
     // only saves the Atlas implicitly inside Shutdown() when the settings file
     // sets System.SaveAtlasToFile — which (a) forces the save to run before
@@ -234,6 +247,9 @@ private:
 
     // Input sensor
     eSensor mSensor;
+
+    // PATCHED (Arrooy fork): see bSynchronous ctor arg / DrainMapping() above.
+    bool mbSynchronous;
 
     // ORB vocabulary used for place recognition and feature matching.
     ORBVocabulary* mpVocabulary;
