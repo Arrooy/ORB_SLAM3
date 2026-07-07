@@ -203,7 +203,7 @@ public:
     // PATCHED (Arrooy fork): absolute IMU-frame pose + velocity of the
     // current tracked frame, once mono-inertial init has converged. Mirrors
     // OpenVINS/OKVIS2's absolute-state output for external logging (see
-    // indoor-vio's OrbSlam3Slam::get_state() / vo::OdometryState). Returns
+    // indoor-vio's OrbSlam3Slam::getState() / vo::OdometryState). Returns
     // false (leaves outputs untouched) until mpAtlas->isImuInitialized().
     bool GetImuState(Sophus::SE3f &Twb, Eigen::Vector3f &velocityWb);
 

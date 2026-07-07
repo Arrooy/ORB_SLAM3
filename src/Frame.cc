@@ -500,7 +500,7 @@ void Frame::UpdatePoseMatrices()
 // LocalMapping/LoopClosing threads (LocalMapping.cc's InitializeIMU/VIBA and
 // LoopClosing.cc's scale-refinement both call Tracking::UpdateFrameIMU() ->
 // mCurrentFrame.SetImuPoseVelocity() cross-thread) while an external reader
-// (indoor-vio's OrbSlam3Slam::get_state(), called on the Tracking/processing
+// (indoor-vio's OrbSlam3Slam::getState(), called on the Tracking/processing
 // thread right after TrackMonocular() returns) reads these same fields via
 // GetImuPosition/GetImuRotation/GetVelocity with zero prior synchronization —
 // a genuine pre-existing race, previously silent (Tracking's own internal
